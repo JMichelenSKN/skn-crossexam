@@ -15,6 +15,15 @@ const oauth2Client = new google.auth.OAuth2(
 
 let storedTokens = null;
 
+// Store config on server so all browsers share it
+let serverConfig = {
+  caseBrief: '',
+  clientCode: '',
+  apiKey: '',
+  elevenLabsKey: '',
+  questionCount: 10
+};
+
 app.post('/ask', async (req, res) => {
   try {
     const { messages, system, apiKey } = req.body;
@@ -42,6 +51,36 @@ app.post('/speak', async (req, res) => {
     res.set('Content-Type', 'audio/mpeg');
     res.send(Buffer.from(audioBuffer));
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Save config from attorney setup screen
+app.post('/save-config', (req, res) => {
+  const { caseBrief, clientCode, apiKey, elevenLabsKey, questionCount } = req.body;
+  if (!caseBrief || !clientCode || !apiKey) return res.status(400).json({ error: 'Missing required fields' });
+  serverConfig = { caseBrief, clientCode, apiKey, elevenLabsKey, questionCount: parseInt(questionCount) || 10 };
+  res.json({ success: true });
+});
+
+// Get config (client uses this to load session settings)
+app.get('/get-config', (req, res) => {
+  res.json({
+    hasConfig: !!serverConfig.clientCode,
+    clientCode: serverConfig.clientCode,
+    questionCount: serverConfig.questionCount
+  });
+});
+
+// Verify client code and return full config if correct
+app.post('/verify-code', (req, res) => {
+  const { code } = req.body;
+  if (!serverConfig.clientCode) return res.status(400).json({ error: 'No config set yet' });
+  if (code !== serverConfig.clientCode) return res.status(401).json({ error: 'Invalid code' });
+  res.json({
+    caseBrief: serverConfig.caseBrief,
+    apiKey: serverConfig.apiKey,
+    elevenLabsKey: serverConfig.elevenLabsKey,
+    questionCount: serverConfig.questionCount
+  });
 });
 
 app.get('/auth/google', (req, res) => {
