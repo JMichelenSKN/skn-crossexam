@@ -1,9 +1,19 @@
 const express = require('express');
 const cors = require('cors');
-const app = express();
+const { google } = require('googleapis');
+const { Readable } = require('stream');
 
+const app = express();
 app.use(cors());
 app.use(express.json({limit: '50mb'}));
+
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+let storedTokens = null;
 
 app.post('/ask', async (req, res) => {
   try {
@@ -34,16 +44,6 @@ app.post('/speak', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-const { google } = require('googleapis');
-
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
-);
-
-let storedTokens = null;
-
 app.get('/auth/google', (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -66,7 +66,6 @@ app.post('/upload-session', async (req, res) => {
   const { transcript, audioBase64, mode, caseName } = req.body;
   const timestamp = new Date().toISOString().slice(0,19).replace(/[:.]/g,'-');
 
-  // Find or create CrossFire Sessions folder
   const search = await drive.files.list({ q: "name='CrossFire Sessions' and mimeType='application/vnd.google-apps.folder' and trashed=false" });
   let folderId = search.data.files[0]?.id;
   if (!folderId) {
@@ -74,14 +73,11 @@ app.post('/upload-session', async (req, res) => {
     folderId = f.data.id;
   }
 
-  // Upload transcript
-  const { Readable } = require('stream');
   await drive.files.create({
     requestBody: { name: `${caseName}-${mode}-${timestamp}.txt`, parents: [folderId] },
     media: { mimeType: 'text/plain', body: Readable.from([transcript]) }
   });
 
-  // Upload audio
   if (audioBase64) {
     const buf = Buffer.from(audioBase64, 'base64');
     await drive.files.create({
@@ -91,4 +87,6 @@ app.post('/upload-session', async (req, res) => {
   }
 
   res.json({ success: true });
-});app.listen(process.env.PORT || 3000, () => console.log('Server running'));
+});
+
+app.listen(process.env.PORT || 3000, () => console.log('Server running'));
