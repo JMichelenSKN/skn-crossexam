@@ -34,4 +34,61 @@ app.post('/speak', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log('Server running'));
+const { google } = require('googleapis');
+
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+let storedTokens = null;
+
+app.get('/auth/google', (req, res) => {
+  const url = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: ['https://www.googleapis.com/auth/drive.file'],
+    prompt: 'consent'
+  });
+  res.redirect(url);
+});
+
+app.get('/auth/callback', async (req, res) => {
+  const { tokens } = await oauth2Client.getToken(req.query.code);
+  storedTokens = tokens;
+  res.redirect(process.env.FRONTEND_URL + '?drive=connected');
+});
+
+app.post('/upload-session', async (req, res) => {
+  if (!storedTokens) return res.status(401).json({ error: 'not_connected' });
+  oauth2Client.setCredentials(storedTokens);
+  const drive = google.drive({ version: 'v3', auth: oauth2Client });
+  const { transcript, audioBase64, mode, caseName } = req.body;
+  const timestamp = new Date().toISOString().slice(0,19).replace(/[:.]/g,'-');
+
+  // Find or create CrossFire Sessions folder
+  const search = await drive.files.list({ q: "name='CrossFire Sessions' and mimeType='application/vnd.google-apps.folder' and trashed=false" });
+  let folderId = search.data.files[0]?.id;
+  if (!folderId) {
+    const f = await drive.files.create({ requestBody: { name: 'CrossFire Sessions', mimeType: 'application/vnd.google-apps.folder' }, fields: 'id' });
+    folderId = f.data.id;
+  }
+
+  // Upload transcript
+  const { Readable } = require('stream');
+  await drive.files.create({
+    requestBody: { name: `${caseName}-${mode}-${timestamp}.txt`, parents: [folderId] },
+    media: { mimeType: 'text/plain', body: Readable.from([transcript]) }
+  });
+
+  // Upload audio
+  if (audioBase64) {
+    const buf = Buffer.from(audioBase64, 'base64');
+    await drive.files.create({
+      requestBody: { name: `${caseName}-${mode}-${timestamp}.mp3`, parents: [folderId] },
+      media: { mimeType: 'audio/mpeg', body: Readable.from([buf]) }
+    });
+  }
+
+  res.json({ success: true });
+});app.listen(process.env.PORT || 3000, () => console.log('Server running'));
